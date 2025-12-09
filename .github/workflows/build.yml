@@ -15,9 +15,9 @@ on:
 jobs:
   build:
     strategy:
-      fail-fast: false # make sure all jobs run even if one fails, not to be fail the entire workflow
+      fail-fast: false
       matrix:
-        os: [windows-latest] # ubuntu-latest, macos-latest # ubuntu macos is not implemented yet
+        os: [windows-latest, ubuntu-latest, macos-latest]
 
     defaults:
       run:
@@ -42,29 +42,30 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      - name: Restore packages (windows)
-        if: ${{ contains(matrix.os, 'windows') }}
+      - name: Restore packages (Windows)
+        if: contains(matrix.os, 'windows')
         run: nuget restore TriCNES.sln -NonInteractive
         shell: powershell
-      
-      - name: Restore packages (non-windows)
+
+      - name: Restore (non-Windows)
         if: ${{ !contains(matrix.os, 'windows') }}
-        run: dotnet restore TriCNES.sln
-        shell: bash      
+        run: echo "Skipping restore – project is .NET Framework Windows-only"
 
       - name: Build solution (Release)
+        if: contains(matrix.os, 'windows')
         run: msbuild TriCNES.sln /p:Configuration=Release /p:Platform="Any CPU" /m /nr:false /v:minimal
         shell: powershell
 
       - name: Prepare upload folder
-        shell: bash
+        if: contains(matrix.os, 'windows')
         run: |
           mkdir -p upload/tas upload/roms
-          cp bin/Release/TriCNES.exe upload/TriCNES.exe || echo "Binary not found at expected location"
+          cp bin/Release/TriCNES.exe upload/TriCNES.exe || echo "Binary not found"
           echo "Place your Tool-Assisted Speedrun (TAS) input files here." >> upload/tas/README.md
           echo "Place your NES ROM files here." >> upload/roms/README.md
 
       - name: Upload artifacts
+        if: contains(matrix.os, 'windows')
         uses: actions/upload-artifact@v5
         with:
           name: TriCNES-Release-${{ matrix.os }}
