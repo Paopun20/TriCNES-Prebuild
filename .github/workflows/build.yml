@@ -42,9 +42,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      - name: Restore packages
+      - name: Restore packages (windows)
+        if: ${{ contains(matrix.os, 'windows') }}
         run: nuget restore TriCNES.sln -NonInteractive
         shell: powershell
+      
+      - name: Restore packages (non-windows)
+        if: ${{ !contains(matrix.os, 'windows') }}
+        run: dotnet restore TriCNES.sln
+        shell: bash      
 
       - name: Build solution (Release)
         run: msbuild TriCNES.sln /p:Configuration=Release /p:Platform="Any CPU" /m /nr:false /v:minimal
