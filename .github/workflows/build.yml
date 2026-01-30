@@ -1,10 +1,8 @@
 name: Build TriCNES
-
 permissions:
   contents: read
   actions: read
   statuses: read
-
 on:
   push:
     branches: ["main"]
@@ -15,53 +13,119 @@ on:
 jobs:
   build:
     strategy:
-      fail-fast: false # make sure all jobs run even if one fails, not to be fail the entire workflow
+      fail-fast: false
       matrix:
-        os: [windows-latest] # ubuntu-latest, macos-latest # ubuntu macos is not implemented yet
-
-    defaults:
-      run:
-        shell: bash
-
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        include:
+          - os: windows-latest
+            artifact-name: TriCNES-Windows
+            binary-name: TriCNES.exe
+          - os: ubuntu-latest
+            artifact-name: TriCNES-Linux
+            binary-name: TriCNES
+          - os: macos-latest
+            artifact-name: TriCNES-macOS
+            binary-name: TriCNES
+    
     runs-on: ${{ matrix.os }}
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Setup MSBuild
+      
+      # Windows-specific build steps
+      - name: Setup MSBuild (Windows)
+        if: runner.os == 'Windows'
         uses: microsoft/setup-msbuild@v2
-
-      - name: Setup NuGet
+      
+      - name: Setup NuGet (Windows)
+        if: runner.os == 'Windows'
         uses: NuGet/setup-nuget@v2
-
-      - name: Cache NuGet packages
+      
+      - name: Cache NuGet packages (Windows)
+        if: runner.os == 'Windows'
         uses: actions/cache@v3
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.sln') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
-
-      - name: Restore packages
+      
+      - name: Restore packages (Windows)
+        if: runner.os == 'Windows'
         run: nuget restore TriCNES.sln -NonInteractive
         shell: powershell
-
-      - name: Build solution (Release)
+      
+      - name: Build solution (Windows)
+        if: runner.os == 'Windows'
         run: msbuild TriCNES.sln /p:Configuration=Release /p:Platform="Any CPU" /m /nr:false /v:minimal
         shell: powershell
-
+      
+      # Cross-platform build using .NET SDK (for Linux/macOS and as alternative for Windows)
+      - name: Setup .NET (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x' # Adjust to your target .NET version
+      
+      - name: Cache .NET packages (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: actions/cache@v3
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-dotnet-${{ hashFiles('**/*.csproj', '**/*.sln') }}
+          restore-keys: |
+            ${{ runner.os }}-dotnet-
+      
+      - name: Restore dependencies (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: dotnet restore TriCNES.sln
+      
+      - name: Build solution (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: dotnet build TriCNES.sln --configuration Release --no-restore
+      
+      # Prepare upload folder (cross-platform)
       - name: Prepare upload folder
         shell: bash
         run: |
           mkdir -p upload/tas upload/roms
-          cp bin/Release/TriCNES.exe upload/TriCNES.exe || echo "Binary not found at expected location"
-          echo "Place your Tool-Assisted Speedrun (TAS) input files here." >> upload/tas/README.md
-          echo "Place your NES ROM files here." >> upload/roms/README.md
-
+          
+          # Find and copy the binary
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            find . -name "${{ matrix.binary-name }}" -path "*/Release/*" -type f -exec cp {} upload/${{ matrix.binary-name }} \;
+            # Copy all DLLs and dependencies
+            find . -path "*/bin/Release/*" -name "*.dll" -exec cp {} upload/ \; 2>/dev/null || true
+            find . -path "*/bin/Release/*" -name "*.config" -exec cp {} upload/ \; 2>/dev/null || true
+          else
+            find . -name "${{ matrix.binary-name }}" -path "*/Release/*" -type f -exec cp {} upload/${{ matrix.binary-name }} \;
+            # Copy all dependencies
+            find . -path "*/bin/Release/*" \( -name "*.dll" -o -name "*.so" -o -name "*.dylib" \) -exec cp {} upload/ \; 2>/dev/null || true
+            # Make binary executable on Unix systems
+            chmod +x upload/${{ matrix.binary-name }} 2>/dev/null || true
+          fi
+          
+          # Verify binary exists
+          if [ ! -f "upload/${{ matrix.binary-name }}" ]; then
+            echo "Error: Binary ${{ matrix.binary-name }} not found!"
+            echo "Searching for build outputs..."
+            find . -path "*/bin/Release/*" -type f
+            exit 1
+          fi
+          
+          # Create README files
+          echo "Place your Tool-Assisted Speedrun (TAS) input files here." > upload/tas/README.md
+          echo "Place your NES ROM files here." > upload/roms/README.md
+          
+          # Create platform info
+          echo "Platform: ${{ matrix.os }}" > upload/BUILD_INFO.txt
+          echo "Built on: $(date)" >> upload/BUILD_INFO.txt
+          echo "Binary: ${{ matrix.binary-name }}" >> upload/BUILD_INFO.txt
+      
       - name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
-          name: TriCNES-Release-${{ matrix.os }}
+          name: ${{ matrix.artifact-name }}
           path: upload
           retention-days: 90
           if-no-files-found: error
