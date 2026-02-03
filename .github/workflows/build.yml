@@ -1,4 +1,5 @@
 name: Build TriCNES
+
 permissions:
   contents: read
   actions: read
@@ -12,216 +13,53 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Build for Windows using .NET Framework 4.8 (original project)
-  build-windows-framework:
-    runs-on: windows-latest
-    
+  build:
+    strategy:
+      fail-fast: false # make sure all jobs run even if one fails, not to be fail the entire workflow
+      matrix:
+        os: [windows-latest] # ubuntu-latest, macos-latest # ubuntu macos is not implemented yet
+
+    defaults:
+      run:
+        shell: bash
+
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
-      
+
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
-      
+
       - name: Cache NuGet packages
         uses: actions/cache@v3
         with:
           path: ~/.nuget/packages
-          key: windows-nuget-${{ hashFiles('**/*.csproj', '**/*.sln') }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.sln') }}
           restore-keys: |
-            windows-nuget-
-      
+            ${{ runner.os }}-nuget-
       - name: Restore packages
         run: nuget restore TriCNES.sln -NonInteractive
-      
-      - name: Build solution (Release)
-        run: msbuild TriCNES.sln /p:Configuration=Release /p:Platform="Any CPU" /m /v:minimal
-      
-      - name: Prepare upload folder
         shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force -Path upload/tas, upload/roms
-          
-          # Find and copy all Release output
-          $releasePath = Get-ChildItem -Recurse -Filter "TriCNES.exe" | 
-                         Where-Object { $_.FullName -like "*\bin\Release\*" } | 
-                         Select-Object -First 1
-          
-          if ($releasePath) {
-            $releaseDir = $releasePath.DirectoryName
-            Copy-Item -Path "$releaseDir\*" -Destination upload\ -Recurse -Force
-            
-            # Ensure directories exist
-            New-Item -ItemType Directory -Force -Path upload/tas, upload/roms | Out-Null
-            
-            # Create README files
-            "Place your Tool-Assisted Speedrun (TAS) input files here." | Out-File -FilePath upload/tas/README.md
-            "Place your NES ROM files here." | Out-File -FilePath upload/roms/README.md
-            
-            # Create run instructions
-            @"
-          Run: TriCNES.exe
-          
-          This is a native Windows build using .NET Framework 4.8.
-          No additional runtime installation required on Windows.
-          "@ | Out-File -FilePath upload/RUN.txt
-            
-            # Create build info
-            @"
-          Platform: Windows (Native)
-          Framework: .NET Framework 4.8
-          Built on: $(Get-Date)
-          Binary: TriCNES.exe
-          Commit: ${{ github.sha }}
-          "@ | Out-File -FilePath upload/BUILD_INFO.txt
-            
-          } else {
-            Write-Error "TriCNES.exe not found in Release output"
-            exit 1
-          }
-      
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: TriCNES-Windows-Native
-          path: upload
-          retention-days: 90
-          if-no-files-found: error
 
-  # Build for Linux and macOS using Mono
-  build-mono:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            artifact-name: TriCNES-Linux-Mono
-          - os: macos-latest
-            artifact-name: TriCNES-macOS-Mono
-    
-    runs-on: ${{ matrix.os }}
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      # Install Mono following official installation methods
-      - name: Install (Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          # Official Mono installation for Ubuntu
-          # https://www.mono-project.com/download/stable/#download-lin
-          sudo apt-get update
-          sudo apt-get install -y ca-certificates gnupg
-          sudo gpg --homedir /tmp --no-default-keyring --keyring /usr/share/keyrings/mono-official-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 3FA7E0328081BFF6A14DA29AA6A19B38D3D831EF
-          echo "deb [signed-by=/usr/share/keyrings/mono-official-archive-keyring.gpg] https://download.mono-project.com/repo/ubuntu stable-focal main" | sudo tee /etc/apt/sources.list.d/mono-official-stable.list
-          sudo apt-get update
-          sudo apt-get install -y mono-complete msbuild referenceassemblies-pcl dotnet-sdk-10.0
-      
-      - name: Install (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # Official Mono installation for macOS
-          # https://www.mono-project.com/download/stable/#download-mac
-          brew install mono
-      
-      - name: Verify Mono installation
-        run: |
-          mono --version
-          msbuild /version
-      
-      - name: Cache NuGet packages
-        uses: actions/cache@v3
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-mono-nuget-${{ hashFiles('**/*.csproj', '**/*.sln') }}
-          restore-keys: |
-            ${{ runner.os }}-mono-nuget-
-      
-      - name: Restore packages
-        run: msbuild /t:Restore TriCNES.sln
-      
-      - name: Build solution
-        run: msbuild TriCNES.sln /p:Configuration=Release /p:Platform="Any CPU" /v:minimal
-      
+      - name: Build solution (Release)
+        run: msbuild TriCNES.sln /p:Configuration=Release /p:Platform="Any CPU" /m /nr:false /v:minimal
+        shell: powershell
+
       - name: Prepare upload folder
         shell: bash
         run: |
           mkdir -p upload/tas upload/roms
-          
-          # Find and copy the binary and dependencies
-          find . -name "TriCNES.exe" -path "*/bin/Release/*" -type f -exec cp {} upload/TriCNES.exe \;
-          find . -path "*/bin/Release/*" -name "*.dll" -exec cp {} upload/ \; 2>/dev/null || true
-          find . -path "*/bin/Release/*" -name "*.config" -exec cp {} upload/ \; 2>/dev/null || true
-          
-          # Verify binary exists
-          if [ ! -f "upload/TriCNES.exe" ]; then
-            echo "Error: Binary TriCNES.exe not found!"
-            echo "Searching for build outputs..."
-            find . -path "*/bin/Release/*" -type f
-            exit 1
-          fi
-          
-          # Create README files
-          echo "Place your Tool-Assisted Speedrun (TAS) input files here." > upload/tas/README.md
-          echo "Place your NES ROM files here." > upload/roms/README.md
-          
-          # Create run instructions
-          cat > upload/RUN.txt << 'EOF'
-          Run: mono TriCNES.exe
-          
-          This build requires Mono runtime to be installed.
-          
-          === Installation Instructions ===
-          
-          Ubuntu/Debian:
-            sudo apt-get install mono-runtime
-          
-          macOS:
-            brew install mono
-          
-          Fedora:
-            sudo dnf install mono-core
-          
-          Other Linux distributions:
-            Visit https://www.mono-project.com/download/stable/
-          
-          === Running the Application ===
-          
-          Once Mono is installed, run:
-            mono TriCNES.exe
-          
-          EOF
-          
-          # Create build info
-          cat > upload/BUILD_INFO.txt << EOF
-          Platform: ${{ matrix.os }}
-          Framework: .NET Framework 4.8 (via Mono)
-          Built on: $(date)
-          Binary: TriCNES.exe
-          Runtime: Mono (required)
-          Mono Version: $(mono --version | head -n1)
-          Commit: ${{ github.sha }}
-          
-          Note: This is a Mono build. Performance and compatibility may differ
-          from the native Windows build. For best results, use the Windows build
-          on Windows systems.
-          EOF
-      
+          cp bin/Release/TriCNES.exe upload/TriCNES.exe || echo "Binary not found at expected location"
+          echo "Place your Tool-Assisted Speedrun (TAS) input files here." >> upload/tas/README.md
+          echo "Place your NES ROM files here." >> upload/roms/README.md
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
-          name: ${{ matrix.artifact-name }}
+          name: TriCNES-Release-${{ matrix.os }}
           path: upload
           retention-days: 90
           if-no-files-found: error
-      
-      - name: Upload release
-        uses: actions/upload-artifact@v4
-        with:
-          name: TriCNES-All-Platforms
-          path: combined-release
-          retention-days: 90
